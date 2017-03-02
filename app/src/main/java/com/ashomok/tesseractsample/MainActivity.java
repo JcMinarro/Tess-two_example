@@ -8,10 +8,11 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Environment;
 import android.os.Bundle;
+import android.os.Environment;
 import android.provider.MediaStore;
 import android.support.annotation.NonNull;
+import android.support.annotation.UiThread;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
 import android.view.View;
@@ -19,6 +20,7 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.ashomok.tesseractsample.tools.BitmapUtils;
 import com.ashomok.tesseractsample.tools.RequestPermissionsTool;
 import com.ashomok.tesseractsample.tools.RequestPermissionsToolImpl;
 import com.googlecode.tesseract.android.TessBaseAPI;
@@ -29,14 +31,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-public class MainActivity extends Activity implements ActivityCompat.OnRequestPermissionsResultCallback  {
+public class MainActivity extends Activity implements ActivityCompat.OnRequestPermissionsResultCallback {
 
     private static final String TAG = MainActivity.class.getSimpleName();
     static final int PHOTO_REQUEST_CODE = 1;
     private TessBaseAPI tessBaseApi;
+
     TextView textView;
     Uri outputFileUri;
-    private static final String lang = "eng";
+    private static final String lang = "ara";
     String result = "empty";
     private RequestPermissionsTool requestTool; //for API >=23 only
 
@@ -53,10 +56,12 @@ public class MainActivity extends Activity implements ActivityCompat.OnRequestPe
             captureImg.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    textView.setText("Processing");
                     startCameraActivity();
                 }
             });
         }
+
         textView = (TextView) findViewById(R.id.textResult);
 
         if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -90,7 +95,7 @@ public class MainActivity extends Activity implements ActivityCompat.OnRequestPe
 
     @Override
     public void onActivityResult(int requestCode, int resultCode,
-                                 Intent data) {
+            Intent data) {
         //making photo
         if (requestCode == PHOTO_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
             doOCR();
@@ -115,7 +120,8 @@ public class MainActivity extends Activity implements ActivityCompat.OnRequestPe
         File dir = new File(path);
         if (!dir.exists()) {
             if (!dir.mkdirs()) {
-                Log.e(TAG, "ERROR: Creation of directory " + path + " failed, check does Android Manifest have permission to write to external storage.");
+                Log.e(TAG, "ERROR: Creation of directory " + path + " failed, check does Android Manifest have " +
+                        "permission to write to external storage.");
             }
         } else {
             Log.i(TAG, "Created directory " + path);
@@ -178,50 +184,98 @@ public class MainActivity extends Activity implements ActivityCompat.OnRequestPe
      *
      * @param imgUri
      */
-    private void startOCR(Uri imgUri) {
-        try {
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = 4; // 1 - means max size. 4 - means maxsize/4 size. Don't use value <4, because you need more memory in the heap to store your data.
-            Bitmap bitmap = BitmapFactory.decodeFile(imgUri.getPath(), options);
+    private void startOCR(final Uri imgUri) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inSampleSize = 4; // 1 - means max size. 4 - means maxsize/4 size. Don't use value <4, because
+                    // you need more memory in the heap to store your data.
+                    Bitmap bitmap = BitmapFactory.decodeFile(imgUri.getPath(), options);
 
-            result = extractText(bitmap);
+                    bitmap = convertBitmap(bitmap);
 
-            textView.setText(result);
+                    Log.d("Jc", "Starting extract text");
+                    result = extractText(bitmap);
 
-        } catch (Exception e) {
-            Log.e(TAG, e.getMessage());
-        }
+                    Log.d("Jc", "Result: " + result);
+                    updateText(result);
+
+                } catch (Exception e) {
+                    Log.e(TAG, e.getMessage(), e);
+                }
+            }
+
+            private Bitmap convertBitmap(Bitmap bitmap) {
+                String cacheDir = MainActivity.this.getExternalCacheDir().getAbsolutePath();
+                BitmapUtils.storeBitmapIntoFile(bitmap, cacheDir + "/original.jpg");
+                BitmapUtils.storeBitmapIntoFile(BitmapUtils.invertColor(bitmap), cacheDir + "/inverted.jpg");
+                BitmapUtils.storeBitmapIntoFile(
+                        BitmapUtils.convertToMonocromoBitmap(bitmap), cacheDir + "/monocromed.jpg");
+                BitmapUtils.storeBitmapIntoFile(BitmapUtils.noiseReduction(bitmap), cacheDir + "/noiseReduction.jpg");
+                BitmapUtils.storeBitmapIntoFile(BitmapUtils.convertGreyScale(bitmap), cacheDir + "/greyScale.jpg");
+                BitmapUtils.storeBitmapIntoFile(
+                        BitmapUtils.noiseReduction(
+                                BitmapUtils.convertGreyScale(bitmap)), cacheDir + "/greyScaleAndNoiseReduction.jpg");
+                BitmapUtils.storeBitmapIntoFile(
+                        BitmapUtils.convertToMonocromoBitmap(
+                                BitmapUtils.invertColor(bitmap)), cacheDir + "/invertedAndMonocrome.jpg");
+                Bitmap invertedAndMonocromeAndNoiseReduction = BitmapUtils.noiseReduction(
+                        BitmapUtils.convertToMonocromoBitmap(
+                                BitmapUtils.invertColor(bitmap)));
+                BitmapUtils.storeBitmapIntoFile(
+                        invertedAndMonocromeAndNoiseReduction,
+                        cacheDir + "/invertedAndMonocromeAndNoiseReduction.jpg");
+                return invertedAndMonocromeAndNoiseReduction;
+            }
+        }).start();
+    }
+
+    @UiThread
+    private void updateText(String text) {
+        textView.setText(text);
     }
 
 
     private String extractText(Bitmap bitmap) {
         try {
+            Log.d("Jc", "Creating TessBaseApi");
             tessBaseApi = new TessBaseAPI();
         } catch (Exception e) {
-            Log.e(TAG, e.getMessage());
+            Log.e("Jc", e.getMessage(), e);
             if (tessBaseApi == null) {
                 Log.e(TAG, "TessBaseAPI is null. TessFactory not returning tess object.");
             }
         }
 
+
+        Log.d("Jc", "Inittialazing TestBaseApi");
         tessBaseApi.init(DATA_PATH, lang);
 
 //       //EXTRA SETTINGS
 //        //For example if we only want to detect numbers
-//        tessBaseApi.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST, "1234567890");
+//        tessBaseApi.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST,
+// "ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz0123456789()+-* ");
+
+        Log.d("Jc", "Seting Up WhiteList");
+        tessBaseApi.setVariable(TessBaseAPI.VAR_CHAR_WHITELIST, "٩ ٨ ٧ ٦ ٥ ٤ ٣ ٢ ١ ٠ؤ ء ئ ة ي و ه ن م ل ك ق ف غ ع ظ ط" +
+                " ض ص ش س ز ر ذ د خ ح ج ث ت ب إ لإ أ لأ لآ ا()+-* ");
 //
 //        //blackList Example
 //        tessBaseApi.setVariable(TessBaseAPI.VAR_CHAR_BLACKLIST, "!@#$%^&*()_+=-qwertyuiop[]}{POIU" +
 //                "YTRWQasdASDfghFGHjklJKLl;L:'\"\\|~`xcvXCVbnmBNM,./<>?");
 
-        Log.d(TAG, "Training file loaded");
+        Log.d("Jc", "Training file loaded");
         tessBaseApi.setImage(bitmap);
         String extractedText = "empty result";
         try {
             extractedText = tessBaseApi.getUTF8Text();
         } catch (Exception e) {
-            Log.e(TAG, "Error in recognizing text.");
+            Log.e("Jc", "Error in recognizing text.", e);
         }
+
+        Log.d("Jc", "Closing TessBaseApi");
         tessBaseApi.end();
         return extractedText;
     }
@@ -234,7 +288,8 @@ public class MainActivity extends Activity implements ActivityCompat.OnRequestPe
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[]
+            grantResults) {
 
         boolean grantedAllPermissions = true;
         for (int grantResult : grantResults) {
